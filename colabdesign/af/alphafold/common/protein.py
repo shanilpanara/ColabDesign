@@ -153,6 +153,10 @@ def to_pdb(prot: Protein) -> str:
   chain_id = 'A'
   # Add all atom sites.
   for i in range(aatype.shape[0]):
+
+    if i != 0 and (residue_index[i] - residue_index[i-1]) > 1:
+      chain_id = chr(ord(chain_id) + 1)
+
     res_name_3 = res_1to3(aatype[i])
     for atom_name, pos, mask, b_factor in zip(
         atom_types, atom_positions[i], atom_mask[i], b_factors[i]):
