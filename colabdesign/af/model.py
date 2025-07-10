@@ -22,12 +22,12 @@ from colabdesign.af.inputs import _af_inputs, update_seq, update_aatype
 
 class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_utils):
   def __init__(self,
-               protocol="fixbb", 
+               protocol="fixbb",
                use_multimer=False,
                use_templates=False,
                debug=False,
-               data_dir=".", 
-               **kwargs):  
+               data_dir=".",
+               **kwargs):
     assert protocol in ["fixbb","hallucination","binder","partial"]
 
     self.protocol = protocol
@@ -35,21 +35,21 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
     self._args = {"use_templates":use_templates, "use_multimer":use_multimer, "use_bfloat16":True,
                   "recycle_mode":"last", "use_mlm": False, "realign": True,
                   "debug":debug, "repeat":False, "homooligomer":False, "copies":1,
-                  "optimizer":"sgd", "best_metric":"loss", 
+                  "optimizer":"sgd", "best_metric":"loss",
                   "traj_iter":1, "traj_max":10000,
                   "clear_prev": True, "use_dgram":False,
                   "shuffle_first":True, "use_remat":True,
-                  "alphabet_size":20, 
+                  "alphabet_size":20,
                   "use_initial_guess":False, "use_initial_atom_pos":False}
 
     if self.protocol == "binder": self._args["use_templates"] = True
 
     self.opt = {"dropout":True, "pssm_hard":False, "learning_rate":0.1, "norm_seq_grad":True,
-                "num_recycles":0, "num_models":1, "sample_models":True,                
+                "num_recycles":0, "num_models":1, "sample_models":True,
                 "temp":1.0, "soft":0.0, "hard":0.0, "alpha":2.0,
                 "con":      {"num":2, "cutoff":14.0, "binary":False, "seqsep":9, "num_pos":float("inf")},
                 "i_con":    {"num":1, "cutoff":21.6875, "binary":False, "num_pos":float("inf")},
-                "template": {"rm_ic":False},                
+                "template": {"rm_ic":False},
                 "weights":  {"seq_ent":0.0, "plddt":0.0, "pae":0.0, "exp_res":0.0, "helix":0.0},
                 "fape_cutoff":10.0}
 
@@ -72,7 +72,7 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
                                  "loss":kwargs.pop("loss_callback",None)},
                        "design":{"pre": kwargs.pop("pre_design_callback",None),
                                  "post":kwargs.pop("post_design_callback",None)}}
-    
+
     for m,n in self._callbacks.items():
       for k,v in n.items():
         if v is None: v = []
@@ -94,8 +94,8 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
       self.opt["pssm_hard"] = True
     else:
       self._cfg = config.model_config("model_1_ptm" if self._args["use_templates"] else "model_3_ptm")
-    
-    if self._args["recycle_mode"] in ["average","first","last","sample"]:
+
+    if self._args["recycle_mode"] in ["average","first","last","sample", "save_recycles"]:
       num_recycles = 0
     else:
       num_recycles = self.opt["num_recycles"]
@@ -153,8 +153,8 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
       #######################################################################
       # get sequence
       seq = self._get_seq(inputs, aux, key())
-            
-      # update sequence features      
+
+      # update sequence features
       pssm = jnp.where(opt["pssm_hard"], seq["hard"], seq["pseudo"])
       if a["use_mlm"]:
         shape = seq["pseudo"].shape[:2]
@@ -162,9 +162,9 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
         update_seq(seq["pseudo"], inputs, seq_pssm=pssm, mlm=mlm)
       else:
         update_seq(seq["pseudo"], inputs, seq_pssm=pssm)
-      
+
       # update amino acid sidechain identity
-      update_aatype(seq["pseudo"][0].argmax(-1), inputs) 
+      update_aatype(seq["pseudo"][0].argmax(-1), inputs)
 
       # define masks
       inputs["msa_mask"] = jnp.where(inputs["seq_mask"],inputs["msa_mask"],0)
@@ -175,7 +175,7 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
       inputs["mask_template_interchain"] = opt["template"]["rm_ic"]
       if a["use_templates"]:
         self._update_template(inputs, key())
-      
+
       # set dropout
       inputs["use_dropout"] = opt["dropout"]
 
@@ -188,7 +188,7 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
                    "seq":seq, "key":key(), "params":params}
         sub_args = {k:fn_args.get(k,None) for k in signature(fn).parameters}
         fn(**sub_args)
-      
+
       #######################################################################
       # OUTPUTS
       #######################################################################
@@ -196,13 +196,13 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
 
       # add aux outputs
       aux.update({"atom_positions": outputs["structure_module"]["final_atom_positions"],
-                  "atom_mask":      outputs["structure_module"]["final_atom_mask"],                  
+                  "atom_mask":      outputs["structure_module"]["final_atom_mask"],
                   "residue_index":  inputs["residue_index"],
                   "aatype":         inputs["aatype"],
                   "plddt":          get_plddt(outputs),
-                  "pae":            get_pae(outputs), 
+                  "pae":            get_pae(outputs),
                   "ptm":            get_ptm(inputs, outputs),
-                  "i_ptm":          get_ptm(inputs, outputs, interface=True), 
+                  "i_ptm":          get_ptm(inputs, outputs, interface=True),
                   "cmap":           get_contact_map(outputs, opt["con"]["cutoff"]),
                   "i_cmap":         get_contact_map(outputs, opt["i_con"]["cutoff"]),
                   "prev":           outputs["prev"]})
@@ -217,7 +217,7 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
 
       # sequence entropy loss
       aux["losses"].update(get_seq_ent_loss(inputs))
-      
+
       # experimental masked-language-modeling
       if a["use_mlm"]:
         aux["mlm"] = outputs["masked_msa"]["logits"]
@@ -235,11 +235,11 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
 
       # save for debugging
       if a["debug"]: aux["debug"] = {"inputs":inputs,"outputs":outputs}
-  
+
       # weighted loss
       w = opt["weights"]
       loss = sum([v * w[k] if k in w else v for k,v in aux["losses"].items()])
       return loss, aux
-    
+
     return {"grad_fn":jax.jit(jax.value_and_grad(_model, has_aux=True, argnums=0)),
             "fn":jax.jit(_model), "runner":runner}

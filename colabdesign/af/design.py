@@ -2,7 +2,7 @@ import random, os
 import jax
 import jax.numpy as jnp
 import numpy as np
-from colabdesign.af.alphafold.common import residue_constants
+from colabdesign.af.alphafold.common import protein
 from colabdesign.shared.utils import copy_dict, update_dict, Key, dict_to_str, to_float, softmax, categorical, to_list, copy_missing
 
 ####################################################
@@ -24,7 +24,7 @@ from colabdesign.shared.utils import copy_dict, update_dict, Key, dict_to_str, t
 class _af_design:
 
   def restart(self, seed=None, opt=None, weights=None,
-              seq=None, mode=None, keep_history=False, reset_opt=True, **kwargs):   
+              seq=None, mode=None, keep_history=False, reset_opt=True, **kwargs):
     '''
     restart the optimization
     ------------
@@ -41,7 +41,7 @@ class _af_design:
       copy_missing(self.opt, self._opt)
       self.opt = copy_dict(self._opt)
       if hasattr(self,"aux"): del self.aux
-    
+
     if not keep_history:
       # initialize trajectory
       self._tmp = {"traj":{"seq":[],"xyz":[],"plddt":[],"pae":[]},
@@ -50,7 +50,7 @@ class _af_design:
     # update options/settings (if defined)
     self.set_opt(opt)
     self.set_weights(weights)
-  
+
     # initialize sequence
     self.set_seed(seed)
     self.set_seq(seq=seq, mode=mode, **kwargs)
@@ -58,6 +58,26 @@ class _af_design:
     # reset optimizer
     self._k = 0
     self.set_optimizer()
+
+  def _init_prev(self) -> dict:
+    a = self._args
+    L = self._inputs["residue_index"].shape[0]
+    prev = {'prev_msa_first_row': np.zeros([L,256]),
+            'prev_pair': np.zeros([L,L,128])}
+    if a["use_initial_guess"] and "batch" in self._inputs:
+      prev["prev_pos"] = self._inputs["batch"]["all_atom_positions"]
+    else:
+      prev["prev_pos"] = np.zeros([L,37,3])
+    if a["use_dgram"]:
+      # TODO: add support for initial_guess + use_dgram
+      prev["prev_dgram"] = np.zeros([L,L,64])
+    if a["use_initial_atom_pos"]:
+      if "batch" in self._inputs:
+        self._inputs["initial_atom_pos"] = self._inputs["batch"]["all_atom_positions"]
+      else:
+        self._inputs["initial_atom_pos"] = np.zeros([L,37,3])
+
+    return prev
 
   def _get_model_nums(self, num_models=None, sample_models=None, models=None):
     '''decide which model params to use'''
@@ -75,12 +95,12 @@ class _af_design:
       model_nums = np.random.choice(ns,(m,),replace=False)
     else:
       model_nums = ns[:m]
-    return model_nums   
+    return model_nums
 
   def run(self, num_recycles=None, num_models=None, sample_models=None, models=None,
           backprop=True, callback=None, model_nums=None, return_aux=False):
     '''run model to get outputs, losses and gradients'''
-    
+
     # pre-design callbacks
     for fn in self._callbacks["design"]["pre"]: fn(self)
 
@@ -92,8 +112,7 @@ class _af_design:
     # loop through model params
     auxs = []
     for n in model_nums:
-      p = self._model_params[n]
-      auxs.append(self._recycle(p, num_recycles=num_recycles, backprop=backprop))
+      auxs.append(self._recycle(n, num_recycles=num_recycles, backprop=backprop))
     auxs = jax.tree_util.tree_map(lambda *x: np.stack(x), *auxs)
 
     # update aux (average outputs)
@@ -104,7 +123,7 @@ class _af_design:
     self.aux = jax.tree_util.tree_map(avg_or_first, auxs)
     self.aux["atom_positions"] = auxs["atom_positions"][0]
     self.aux["all"] = auxs
-    
+
     # post-design callbacks
     for fn in (self._callbacks["design"]["post"] + to_list(callback)): fn(self)
 
@@ -129,7 +148,7 @@ class _af_design:
     self.aux["log"] = to_float(self.aux["log"])
     self.aux["log"].update({"recycles":int(self.aux["num_recycles"]),
                             "models":model_nums})
-    
+
     if return_aux: return self.aux
 
   def _single(self, model_params, backprop=True):
@@ -144,40 +163,52 @@ class _af_design:
     aux.update({"loss":loss,"grad":grad})
     return aux
 
-  def _recycle(self, model_params, num_recycles=None, backprop=True):   
+  def _recycle(self, model_num, num_recycles=None, backprop=True):
     '''multiple passes through the model (aka recycle)'''
+    model_params = self._model_params[model_num]
     a = self._args
     mode = a["recycle_mode"]
+    print(f"Recycle mode: {mode}")
     if num_recycles is None:
       num_recycles = self.opt["num_recycles"]
 
     if mode in ["backprop","add_prev"]:
       # recycles compiled into model, only need single-pass
       aux = self._single(model_params, backprop)
-    
+
+    elif mode == "save_recycles":
+      # NOTE: mk_af_model was modified to ensure num_recycles == 0 for each call of `_single()`
+
+      # Setup
+      prev = self._init_prev()
+      self._inputs["prev"] = prev
+      cycles = (num_recycles + 1)
+
+      # Run cycles
+      for idx in range(cycles):
+        aux = self._single(model_params, backprop=False)
+        self._inputs["prev"] = aux["prev"]
+
+        save_dir = os.environ.get('SAVE_RECYCLE_STRUCTURES', None)
+        if save_dir is not None:
+          print(f"Saving cycle #{idx} → {save_dir}/recycle_{idx}.pdb")
+
+          p = {
+              'aatype': np.array(self._inputs['aatype']),
+              'residue_index': np.array(self._inputs['residue_index']),
+              'atom_positions': np.array(aux['atom_positions']),
+              'atom_mask': np.array(aux['atom_mask']),
+              'b_factors': 100 * np.array(aux['atom_mask']) * np.array(aux['plddt'])[..., None]
+          }
+          pdb = protein.to_pdb(protein.Protein(**p)).splitlines()[1:-2]
+
+          with open(os.path.join(save_dir, f"m{model_num}_r{idx}.pdb"), 'w') as f:
+              f.write("\n".join(pdb))
+
+        print(f"Aux losses: {aux['losses']}")
+
     else:
-      L = self._inputs["residue_index"].shape[0]
-      
-      # intialize previous
-      if "prev" not in self._inputs or a["clear_prev"]:
-        prev = {'prev_msa_first_row': np.zeros([L,256]),
-                'prev_pair': np.zeros([L,L,128])}
-
-        if a["use_initial_guess"] and "batch" in self._inputs:
-          prev["prev_pos"] = self._inputs["batch"]["all_atom_positions"] 
-        else:
-          prev["prev_pos"] = np.zeros([L,37,3])
-
-        if a["use_dgram"]:
-          # TODO: add support for initial_guess + use_dgram
-          prev["prev_dgram"] = np.zeros([L,L,64])
-
-        if a["use_initial_atom_pos"]:
-          if "batch" in self._inputs:
-            self._inputs["initial_atom_pos"] = self._inputs["batch"]["all_atom_positions"] 
-          else:
-            self._inputs["initial_atom_pos"] = np.zeros([L,37,3])              
-      
+      prev = self._init_prev()
       self._inputs["prev"] = prev
       # decide which layers to compute gradients for
       cycles = (num_recycles + 1)
@@ -187,10 +218,10 @@ class _af_design:
       if mode == "average": mask = [1/cycles] * cycles
       if mode == "last":    mask[-1] = 1
       if mode == "first":   mask[0] = 1
-      
-      # gather gradients across recycles 
+
+      # gather gradients across recycles
       grad = []
-      for m in mask:        
+      for m in mask:
         if m == 0:
           aux = self._single(model_params, backprop=False)
         else:
@@ -198,10 +229,10 @@ class _af_design:
           grad.append(jax.tree_util.tree_map(lambda x:x*m, aux["grad"]))
         self._inputs["prev"] = aux["prev"]
         if a["use_initial_atom_pos"]:
-          self._inputs["initial_atom_pos"] = aux["prev"]["prev_pos"]                
+          self._inputs["initial_atom_pos"] = aux["prev"]["prev_pos"]
 
       aux["grad"] = jax.tree_util.tree_map(lambda *x: np.stack(x).sum(0), *grad)
-    
+
     aux["num_recycles"] = num_recycles
     return aux
 
@@ -209,15 +240,15 @@ class _af_design:
            num_models=None, sample_models=None, models=None, backprop=True,
            callback=None, save_best=False, verbose=1):
     '''do one step of gradient descent'''
-    
+
     # run
     self.run(num_recycles=num_recycles, num_models=num_models, sample_models=sample_models,
              models=models, backprop=backprop, callback=callback)
 
-    # modify gradients    
+    # modify gradients
     if self.opt["norm_seq_grad"]: self._norm_seq_grad()
     self._state, self.aux["grad"] = self._optimizer(self._state, self.aux["grad"], self._params)
-  
+
     # apply gradients
     lr = self.opt["learning_rate"] * lr_scale
     self._params = jax.tree_util.tree_map(lambda x,g:x-lr*g, self._params, self.aux["grad"])
@@ -233,7 +264,7 @@ class _af_design:
     keys = ["models","recycles","hard","soft","temp","seqid","loss",
             "seq_ent","mlm","helix","pae","i_pae","exp_res","con","i_con",
             "sc_fape","sc_rmsd","dgram_cce","fape","plddt","ptm"]
-    
+
     if "i_ptm" in aux["log"]:
       if len(self._lengths) > 1:
         keys.append("i_ptm")
@@ -246,8 +277,8 @@ class _af_design:
   def _save_results(self, aux=None, save_best=False,
                     best_metric=None, metric_higher_better=False,
                     verbose=True):
-    if aux is None: aux = self.aux    
-    self._tmp["log"].append(aux["log"])    
+    if aux is None: aux = self.aux
+    self._tmp["log"].append(aux["log"])
     if (self._k % self._args["traj_iter"]) == 0:
       # update traj
       traj = {"seq":   aux["seq"]["pseudo"],
@@ -279,7 +310,7 @@ class _af_design:
               return_aux=False, verbose=True,  seed=None, **kwargs):
     '''predict structure for input sequence (if provided)'''
 
-    def load_settings():    
+    def load_settings():
       if "save" in self._tmp:
         [self.opt, self._args, self._params, self._inputs] = self._tmp.pop("save")
 
@@ -293,10 +324,10 @@ class _af_design:
     if seed is not None: self.set_seed(seed)
 
     # set [seq]uence/[opt]ions
-    if seq is not None: self.set_seq(seq=seq, bias=bias)    
+    if seq is not None: self.set_seq(seq=seq, bias=bias)
     self.set_opt(hard=hard, soft=soft, temp=temp, dropout=dropout, pssm_hard=True)
     self.set_args(shuffle_first=False)
-    
+
     # run
     self.run(num_recycles=num_recycles, num_models=num_models,
              sample_models=sample_models, models=models, backprop=False, **kwargs)
@@ -315,14 +346,14 @@ class _af_design:
              temp=1.0, e_temp=None,
              hard=0.0, e_hard=None,
              step=1.0, e_step=None,
-             dropout=True, opt=None, weights=None, 
-             num_recycles=None, ramp_recycles=False, 
+             dropout=True, opt=None, weights=None,
+             num_recycles=None, ramp_recycles=False,
              num_models=None, sample_models=None, models=None,
              backprop=True, callback=None, save_best=False, verbose=1):
 
     # update options/settings (if defined)
     self.set_opt(opt, dropout=dropout)
-    self.set_weights(weights)    
+    self.set_weights(weights)
     m = {"soft":[soft,e_soft],"temp":[temp,e_temp],
          "hard":[hard,e_hard],"step":[step,e_step]}
     m = {k:[s,(s if e is None else e)] for k,(s,e) in m.items()}
@@ -341,10 +372,10 @@ class _af_design:
           if k == "step": step = v
           elif k == "num_recycles": num_recycles = round(v)
           else: self.set_opt({k:v})
-      
+
       # decay learning rate based on temperature
       lr_scale = step * ((1 - self.opt["soft"]) + (self.opt["soft"] * self.opt["temp"]))
-      
+
       self.step(lr_scale=lr_scale, num_recycles=num_recycles,
                 num_models=num_models, sample_models=sample_models, models=models,
                 backprop=backprop, callback=callback, save_best=save_best, verbose=verbose)
@@ -356,7 +387,7 @@ class _af_design:
   def design_soft(self, iters=100, temp=1, **kwargs):
     ''' optimize softmax(logits/temp)'''
     self.design(iters, soft=1, temp=temp, **kwargs)
-  
+
   def design_hard(self, iters=100, **kwargs):
     ''' optimize argmax(logits) '''
     self.design(iters, soft=1, hard=1, **kwargs)
@@ -376,12 +407,12 @@ class _af_design:
       self.design_logits(soft_iters, e_soft=1,
         ramp_recycles=ramp_recycles, **kwargs)
       self._tmp["seq_logits"] = self.aux["seq"]["logits"]
-      
+
     # stage 2: softmax(logits/1.0) -> softmax(logits/0.01)
     if temp_iters > 0:
       if verbose: print("Stage 2: running (soft → hard)")
       self.design_soft(temp_iters, e_temp=1e-2, **kwargs)
-    
+
     # stage 3:
     if hard_iters > 0:
       if verbose: print("Stage 3: running (hard)")
@@ -406,7 +437,7 @@ class _af_design:
         p = self.opt["fix_pos"]
         seq[...,p] = self._wt_aatype[...,p]
       i_prob[p] = 0
-    
+
     for m in range(mutation_rate):
       # sample position
       # https://www.biorxiv.org/content/10.1101/2021.08.24.457549v1
@@ -421,13 +452,13 @@ class _af_design:
 
       # return mutant
       seq[:,i] = a
-    
+
     return seq
 
   def design_semigreedy(self, iters=100, tries=10, dropout=False,
                         save_best=True, seq_logits=None, e_tries=None, **kwargs):
 
-    '''semigreedy search'''    
+    '''semigreedy search'''
     if e_tries is None: e_tries = tries
 
     # get starting sequence
@@ -438,7 +469,7 @@ class _af_design:
 
     # bias sampling towards the defined bias
     if seq_logits is None: seq_logits = 0
-    
+
     model_flags = {k:kwargs.pop(k,None) for k in ["num_models","sample_models","models"]}
     verbose = kwargs.pop("verbose",1)
 
@@ -450,7 +481,7 @@ class _af_design:
     # optimize!
     if verbose:
       print("Running semigreedy optimization...")
-    
+
     for i in range(iters):
       buff = []
       model_nums = self._get_model_nums(**model_flags)
@@ -521,7 +552,7 @@ class _af_design:
     model_flags = {k:kwargs.pop(k,None) for k in ["num_models","sample_models","models"]}
 
     # initialize
-    plddt, best_loss, current_loss = None, np.inf, np.inf 
+    plddt, best_loss, current_loss = None, np.inf, np.inf
     current_seq = (self._params["seq"] + self._inputs["bias"]).argmax(-1)
     if seq_logits is None: seq_logits = 0
 
@@ -530,7 +561,7 @@ class _af_design:
     for i in range(steps):
 
       # update temperature
-      T = T_init * (np.exp(np.log(0.5) / half_life) ** i) 
+      T = T_init * (np.exp(np.log(0.5) / half_life) ** i)
 
       # mutate sequence
       if i == 0:
@@ -544,17 +575,17 @@ class _af_design:
       model_nums = self._get_model_nums(**model_flags)
       aux = self.predict(seq=mut_seq, return_aux=True, verbose=False, model_nums=model_nums, **kwargs)
       loss = aux["log"]["loss"]
-  
+
       # decide
       delta = loss - current_loss
       if i == 0 or delta < 0 or np.random.uniform() < np.exp( -delta / T):
 
         # accept
         (current_seq,current_loss) = (mut_seq,loss)
-        
+
         plddt = aux["all"]["plddt"].mean(0)
         plddt = plddt[self._target_len:] if self.protocol == "binder" else plddt[:self._len]
-        
+
         if loss < best_loss:
           (best_loss, self._k) = (loss, i)
           self.set_seq(seq=current_seq, bias=self._inputs["bias"])
