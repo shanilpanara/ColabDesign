@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from inspect import signature
+from typing import Literal
 
 from colabdesign.af.alphafold.model import data, config, model, all_atom
 from colabdesign.af.alphafold.model.msa import make_msa_feats
@@ -23,12 +24,12 @@ from colabdesign.af.inputs import _af_inputs
 
 class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_utils):
   def __init__(self,
-               protocol="contigs",
-               model_type="alphafold2_ptm",
+               protocol: Literal["fixbb","hallucination","binder","contigs","partial"] = "contigs",
+               model_type: Literal["alphafold2","alphafold2_ptm","alphafold2_multimer_v3","alphafold2_pseudo_multimer_v3"] = "alphafold2_ptm",
                use_templates=False,
                debug=False,
                data_dir=".",
-               **kwargs):  
+               **kwargs):
     assert protocol in ["fixbb","hallucination","binder","contigs","partial"]
     assert model_type in ["alphafold2","alphafold2_ptm","alphafold2_multimer_v3","alphafold2_pseudo_multimer_v3"]
     if kwargs.pop("use_multimer",False):
@@ -42,8 +43,8 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
       # structure options
       "use_templates":use_templates, "num_templates":1, "use_batch_as_template":True,
       "use_initial_guess":False, "use_initial_atom_pos":False,"use_drmsd":False,
-      "use_dgram":False, "use_dgram_pred":False, "realign": True, "use_sidechains": False, 
-      
+      "use_dgram":False, "use_dgram_pred":False, "realign": True, "use_sidechains": False,
+
       # sequence options
       "optimize_seq":True, "alphabet_size":20, "shuffle_first":True, "copies":1,
       "num_msa":512, "num_extra_msa":1024, "use_mlm": False, "use_cluster_profile": False,
@@ -54,8 +55,8 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
       "use_ptm": ("ptm" in model_type or "multimer" in model_type),
 
       # optimizer options
-      "optimizer":"sgd", "best_metric":"loss", 
-      "traj_iter":1, "traj_max":10000, "clear_prev": True,  "recycle_mode":"last", 
+      "optimizer":"sgd", "best_metric":"loss",
+      "traj_iter":1, "traj_max":10000, "clear_prev": True,  "recycle_mode":"last",
 
       # technical options
       "use_remat":True, "use_bfloat16":True, "debug":debug
@@ -68,9 +69,9 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
                  "temp":1.0, "soft":0.0, "hard":0.0, "alpha":2.0, "partial_loss":True,
                  "con":      {"num":2, "cutoff":14.0, "binary":False, "seqsep":9, "num_pos":float("inf")},
                  "i_con":    {"num":1, "cutoff":21.6875, "binary":False, "num_pos":float("inf")},
-                 "template": {"rm":False, "rm_ic":False, "rm_sc":True, "rm_seq":True},                
+                 "template": {"rm":False, "rm_ic":False, "rm_sc":True, "rm_seq":True},
                  "mlm":      {"replace_fraction":0.15,"uniform_prob":0.1,"profile_prob":0.1,"same_prob":0.1}}
-    
+
     # set arguments/options
     if "initial_guess" in kwargs: kwargs["use_initial_guess"] = kwargs.pop("initial_guess")
     model_names = kwargs.pop("model_names",None)
@@ -100,7 +101,7 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
                                  "loss":kwargs.pop("loss_callback",None)},
                        "design":{"pre": kwargs.pop("pre_design_callback",None),
                                  "post":kwargs.pop("post_design_callback",None)}}
-    
+
     for m,n in self._callbacks.items():
       for k,v in n.items():
         if v is None: v = []
@@ -172,7 +173,7 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
 
     # setup function to get gradients
     def _model(params, model_params, inputs, key):
-            
+
       opt = inputs["opt"]
       aux = {}
       key = Key(key=key).get
@@ -193,7 +194,7 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
       inputs["mask_template_interchain"] = opt["template"]["rm_ic"]
       if a["use_templates"]:
         self._update_template(inputs)
-      
+
       # set dropout
       inputs["use_dropout"] = opt["dropout"]
 
@@ -206,11 +207,11 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
 
       # pre callback
       for fn in self._callbacks["model"]["pre"]:
-        fn_args = {"inputs":inputs, "opt":opt, "aux":aux, "seq":seq, 
+        fn_args = {"inputs":inputs, "opt":opt, "aux":aux, "seq":seq,
                    "key":key(), "params":params, "model_params":model_params}
         sub_args = {k:fn_args.get(k,None) for k in signature(fn).parameters}
         fn(**sub_args)
-      
+
       #######################################################################
       # OUTPUTS
       #######################################################################
@@ -218,7 +219,7 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
 
       # add aux outputs
       aux.update({"atom_positions": outputs["structure_module"]["final_atom_positions"],
-                  "atom_mask":      outputs["structure_module"]["final_atom_mask"],                  
+                  "atom_mask":      outputs["structure_module"]["final_atom_mask"],
                   "residue_index":  inputs["residue_index"],
                   "aatype":         inputs["aatype"],
                   "plddt":          get_plddt(outputs),
@@ -252,11 +253,11 @@ class mk_af_model(design_model, _af_inputs, _af_loss, _af_prep, _af_design, _af_
 
       # save for debugging
       if a["debug"]: aux["debug"] = {"inputs":inputs,"outputs":outputs}
-  
+
       # weighted loss
       w = opt["weights"]
       loss = sum([v * w[k] if k in w else v for k,v in aux["losses"].items()])
       return loss, aux
-    
+
     return {"grad_fn":jax.jit(jax.value_and_grad(_model, has_aux=True, argnums=0)),
             "fn":jax.jit(_model), "runner":runner}

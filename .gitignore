@@ -1,2 +1,8 @@
 **/.DS_Store
 *.pyc
+
+examples/01
+
+*egg-info
+
+*lock

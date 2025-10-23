@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "colabdesign"
+version = "1.4"
+description = "Making Protein Design accessible to all via Google Colab!"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Sergey Ovchinnikov", email = "sokrypton@gmail.com"},
+    {name = "Shihao Feng"},
+    {name = "Justas Dauparas"},
+    {name = "Weikun Wu"},
+    {name = "Christopher Frank"},
+]
+maintainers = [
+    {name = "Sergey Ovchinnikov", email = "sokrypton@gmail.com"},
+]
+keywords = [
+    "protein design",
+    "alphafold",
+    "colabdesign",
+    "computational biology",
+    "bioinformatics",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "py3Dmol",
+    "absl-py",
+    "biopython",
+    "chex",
+    "dm-haiku",
+    "dm-tree",
+    "immutabledict",
+    "ml-collections",
+    "numpy",
+    "pandas",
+    "scipy",
+    "optax",
+    "joblib",
+    "matplotlib",
+    "IPython",
+    "jax[cuda12]==0.5.3; sys_platform == 'linux'",
+    "pyarrow",
+    "typer>=0.20.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/sokrypton/ColabDesign"
+Repository = "https://github.com/sokrypton/ColabDesign"
+Documentation = "https://github.com/sokrypton/ColabDesign"
+"Bug Tracker" = "https://github.com/sokrypton/ColabDesign/issues"
+Discord = "https://discord.gg/gna8maru7d"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["colabdesign*"]
+
