@@ -56,6 +56,18 @@ dependencies = [
     "jax[cuda12]==0.5.3; sys_platform == 'linux'",
     "pyarrow",
     "typer",
+    "jax==0.5.3",
+    "jax-cuda12-plugin==0.5.3",
+    "jax-cuda12-pjrt==0.5.3",
+
+    # Minimal safety pins
+    "nvidia-cublas-cu12<12.9",     # avoid 12.9+ with JAX 0.5.3
+    "nvidia-cudnn-cu12<9.11",      # avoid 9.11+ with JAX 0.5.3
+
+    # Keep the core CUDA bits aligned with 12.8.x (broad, not exact)
+    "nvidia-cuda-runtime-cu12>=12.8,<12.9",
+    "nvidia-cuda-nvrtc-cu12>=12.8,<12.9",
+    "nvidia-nvjitlink-cu12>=12.8,<12.9",
 ]
 
 [project.urls]
