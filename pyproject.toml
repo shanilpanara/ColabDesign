@@ -60,14 +60,27 @@ dependencies = [
     "jax-cuda12-plugin==0.5.3",
     "jax-cuda12-pjrt==0.5.3",
 
-    # Minimal safety pins
-    "nvidia-cublas-cu12<12.9",     # avoid 12.9+ with JAX 0.5.3
-    "nvidia-cudnn-cu12<9.11",      # avoid 9.11+ with JAX 0.5.3
-
+#    # minimal safety pins
+#    "nvidia-cublas-cu12<12.9",     # avoid 12.9+ with jax 0.5.3
+#    "nvidia-cudnn-cu12<9.11",      # avoid 9.11+ with JAX 0.5.3
+#  
     # Keep the core CUDA bits aligned with 12.8.x (broad, not exact)
     "nvidia-cuda-runtime-cu12>=12.8,<12.9",
     "nvidia-cuda-nvrtc-cu12>=12.8,<12.9",
     "nvidia-nvjitlink-cu12>=12.8,<12.9",
+    
+    # CUDA 12.8 user-space libs (match what worked on H100)
+    "nvidia-cuda-runtime-cu12==12.8.*",
+    "nvidia-cuda-nvrtc-cu12==12.8.*",
+    "nvidia-cuda-cupti-cu12==12.8.*",
+    "nvidia-nvjitlink-cu12==12.8.*",
+    "nvidia-cublas-cu12==12.8.*",
+    "nvidia-cufft-cu12==11.2.*",
+    "nvidia-curand-cu12==10.3.*",
+    "nvidia-cusolver-cu12==11.6.*",
+    "nvidia-cusparse-cu12==12.4.*",
+    "nvidia-nccl-cu12==2.20.*",
+    "nvidia-cudnn-cu12==9.1.*",
 ]
 
 [project.urls]
