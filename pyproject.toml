@@ -55,7 +55,7 @@ dependencies = [
     "IPython",
     "jax[cuda12]==0.5.3; sys_platform == 'linux'",
     "pyarrow",
-    "typer>=0.20.0",
+    "typer",
 ]
 
 [project.urls]
